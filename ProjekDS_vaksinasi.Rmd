@@ -1,0 +1,236 @@
+---
+title: 'Project DS #Vaksin'
+author: "RR Lydia (123190086) & Lisa Anis (123190089)"
+date: "11/16/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r} 
+library(tidyverse)
+library(twitteR)
+library(rtweet)
+library(tm) 
+library(vroom) 
+library(ggplot2) 
+library(plyr)
+library(shiny)
+library(wordcloud) 
+library(RColorBrewer)
+```
+
+```{r}
+## Crawling Data Twitter menggunakan API
+api_key<- "D5zz4dT16xjWxi5PfwwPBVPy7"
+api_secret<- "4vzip8PPUbXftEJcdTOdENygdk7Eqgnkp5T4px2bwlMa7dc5oj"
+access_token<- "1060059384-0RmpWSJXqYXU5aXZ1Qshr7OG41U4Mth37ehKfgW"
+access_token_secret<- "E7F8j8tRh4ASFJOeOuefzOFD5ejIjSIdibRXQ2aCBsHjI"
+setup_twitter_oauth(api_key,api_secret,access_token,access_token_secret)
+
+tweet = searchTwitter('vaksinasi masyarakat', 
+                   n = 3000,
+                   retryOnRateLimit = 10e5, lang = "id")
+saveRDS(tweet,file = 'tweetVaksinasi.rds')
+```
+
+```{r load dataset}
+tweet <- readRDS('tweetVaksinasi.rds')
+datatweet = twListToDF(tweet) #convert twitteR list to data
+
+tweetVaksinasi <- datatweet$text
+tweetVaksinasi_c <- Corpus(VectorSource(tweetVaksinasi))
+
+##menghapus URL
+removeURL <- function(x) gsub("http[^[:space:]]*", "", x)
+tweetclean <- tm_map(tweetVaksinasi_c, removeURL)
+
+##menghapus NewLine
+removeNL <- function(y) gsub("\n", " ", y)
+tweetclean <- tm_map(tweetclean, removeNL)
+
+##menghapus koma
+replacecomma <- function(y) gsub(",", "", y)
+tweetclean <- tm_map(tweetclean, replacecomma)
+
+##menghapus titik2
+removetitik2 <- function(y) gsub(":", "", y)
+tweetclean <- tm_map(tweetclean, removetitik2)
+
+##menghapus titik koma
+removetitikkoma <- function(y) gsub(";", " ", y)
+tweetclean <- tm_map(tweetclean, removetitikkoma)
+
+##menghapus titik3
+removetitik3 <- function(y) gsub("p…", "", y)
+tweetclean <- tm_map(tweetclean, removetitik3)
+
+##menghapus RT(retweet)
+removeRT <- function(y) gsub("RT", "", y)
+tweetclean <- tm_map(tweetclean, removeRT)
+
+##menghapus &
+removeamp <- function(y) gsub("&amp;", "", y)
+tweetclean <- tm_map(tweetclean, removeamp)
+
+##menghapus username
+removeUN <- function(z) gsub("@\\w+", "", z)
+tweetclean <- tm_map(tweetclean, removeUN)
+
+##menghapus space dan lainnya
+remove.all <- function(xy) gsub("[^[:alpha:][:space:]]*", "", xy)
+tweetclean <- tm_map(tweetclean,remove.all)
+#menghapus tanda baca
+tweetclean <- tm_map(tweetclean, removePunctuation)
+#mengubah ke huruf kecil
+tweetclean <- tm_map(tweetclean, tolower)
+
+myStopwords = readLines("stopwords-id.txt")
+
+tweetclean <- tm_map(tweetclean,removeWords,myStopwords)
+```
+
+```{r}
+##Menyimpan data yang sudah bersih ke dataframe dan disimpan pada .csv
+dataframe<-data.frame(text=unlist(sapply(tweetclean, `[`)), stringsAsFactors=F)
+
+write.csv(dataframe,file = 'tweetclean_Vaksinasi.csv')
+```
+
+```{r}
+## Naive Bayes
+library(e1071)   #Library untuk Naive Bayes
+library(caret)   #Library untuk Klasifikasi Data
+library(syuzhet) #Library untuk membaca fungsi get_nrc (sentiment analysis)
+
+#Membaca file csv yang sudah menjalani proses cleaning data
+vaksinasi_data <-read.csv("tweetclean_Vaksinasi.csv",stringsAsFactors = FALSE)
+
+#Mengubah text menjadi char
+tweets <- as.character(vaksinasi_data$text)
+
+#Memanggil sentimen dictionary untuk menghitung presentasi dari beberapa emotion dan mengubahnya ke dalam text file
+sentimen<-get_nrc_sentiment(tweets)
+
+tweet_sentiment<-cbind(vaksinasi_data$text,sentimen)
+par(mar=rep(3,4))
+barplot(
+  colSums(sentimen),
+  col=rainbow(10),
+  ylab='count',
+  main='Sentiment Analysis'
+  )
+```
+
+```{r}
+## Mengklasifikasikan sentimen positif, negatif, dan neutral
+class_sentiment <- data.frame(negative=sentimen$negative,positive=sentimen$positive)
+klasifikasi <- mutate(class_sentiment, text_sentiment = ifelse((class_sentiment$negative != class_sentiment$positive),
+                                                               ifelse(class_sentiment$negative!=0,print("negative"),
+                                                                      print("positive")),print("neutral")))
+
+data_vaksinasi <- data.frame(text=tweets,sentimen=klasifikasi$text_sentiment)
+view(data_vaksinasi)
+
+```
+
+
+```{r}
+#Menampilkan barplot representasi 5 kata yang sering muncul
+data_vaksin = as.factor(vaksinasi_data$text)
+corpus = Corpus(VectorSource(data_vaksin))
+tdm <- TermDocumentMatrix(corpus)
+tdm <- removeSparseTerms(tdm, sparse = 0.98)
+tdm <- as.matrix(tdm)
+
+w = sort(rowSums(tdm), decreasing = T)
+barplot(w[1:5],
+        las=2,
+        main = "Frequency of Words",
+        col= rainbow(20))
+```
+
+```{r}
+## WordCloud
+#Membuat data dalam Corpus
+VaccineDoc <- function(text){
+  TextDoc <- Corpus(VectorSource(text))
+  # Build a term-document matrix
+  TextDoc_dtm <- TermDocumentMatrix(TextDoc)
+  dtm_m <- as.matrix(TextDoc_dtm)
+  # Sort by descearing value of frequency
+  dtm_v <- sort(rowSums(dtm_m),decreasing=TRUE)
+  dtm_d <- data.frame(word = names(dtm_v),freq=dtm_v)
+  }
+```
+
+```{r}
+#Menampilkan kemunculan kata yang sama
+getwordcloud <- function(x){
+  set.seed(12345)
+  wordcloud(words = x$word, freq = x$freq, min.freq = 3,
+            max.words=100, random.order=FALSE, rot.per=0.40, 
+            colors=brewer.pal(8, "Dark2"))
+}
+getwordcloud(freq_words)
+```
+
+
+```{r ui}
+library(markdown)
+library(DT)
+
+ui <- fluidPage(
+  titlePanel("Tweets Vaksinasi Covid-19 Masyarakat Indonesia"), #halaman judul
+  mainPanel(
+    tabsetPanel(type = "tabs",
+                tabPanel("Data Twitter", DT::dataTableOutput('data')), 
+                tabPanel("Sentiment Analysis", DT::dataTableOutput('sentiment')), 
+                tabPanel("Scatterplot", plotOutput('scatterplot')), 
+                tabPanel("Frequency Words", plotOutput('freqword')), 
+                tabPanel("Wordcloud", plotOutput('wordcloud')) 
+    )
+  )
+)
+```
+
+```{r server}
+server <- function(input, output) {
+  output$data <- DT::renderDataTable({
+    DT::datatable(vaksinasi_data, options = list(lengthChange = FALSE))
+  })
+  
+  output$sentiment <- DT::renderDataTable({
+    DT::datatable(data_vaksinasi, options = list(lengthChange = FALSE))
+  })
+  
+ output$scatterplot <- renderPlot({
+  barplot( 
+        colSums(sentimen),
+        col=rainbow(10),
+        ylab='count',
+        main='Sentiment Analysis'
+  )
+  })
+ 
+ output$freqword<- renderPlot({
+ barplot(w[1:5],
+        las=2,
+        main = "Frequency of Words",
+        col= rainbow(15))
+  })
+ 
+ output$wordcloud<- renderPlot({
+    getwordcloud(freq_words)
+  })
+ 
+}
+```
+
+
+```{r run-opp}
+shinyApp(ui = ui, server = server)
+```
